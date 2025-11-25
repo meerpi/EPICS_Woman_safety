@@ -25,6 +25,13 @@ This archive contains only the essential source code and configuration:
    ```bash
    flutter pub get
    ```
+3. Run the python server
+    ```bash
+    pip install requirements.txt
+
+    lib\Python Backend\app.py
+    ```
+
 
 ### Run Options
 
@@ -65,6 +72,7 @@ lib/
 │   └── safety_tips/          # Safety tips
 └── services/                 # Business logic
     └── auth_service.dart     # Authentication service
+|── Python Backend/           # Python backend logic for login, signup
 
 ## Key Features
 ✅ User authentication (login/signup)

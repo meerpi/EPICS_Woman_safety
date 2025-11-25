@@ -241,8 +241,9 @@ women_safety_app/
 │   │   ├── history/              # Safety history
 │   │   ├── safety_tips/          # Safety tips
 │   │   └── terms/                # Terms & conditions
-│   └── services/                 # Business logic
-│       └── auth_service.dart     # Authentication
+│   |── services/                 # Business logic
+│   |   └── auth_service.dart     # Authentication
+│   └── Python Backend/           # Python backend logic for login, signup
 ├── android/                      # Android native files
 ├── ios/                          # iOS native files (Mac only)
 ├── pubspec.yaml                  # Dependencies
