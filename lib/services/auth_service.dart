@@ -8,7 +8,7 @@ class AuthService {
   // - Android emulator: http://10.0.2.2:5000
   // - iOS simulator: http://127.0.0.1:5000
   // - Physical device: use your machine IP (e.g., http://192.168.1.100:5000)
-  static const String baseUrl = 'http://127.0.0.1:5000';
+  static const String baseUrl = 'http://10.235.8.136:5000';
 
   final FlutterSecureStorage _storage = const FlutterSecureStorage();
 

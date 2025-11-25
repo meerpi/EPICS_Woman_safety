@@ -1,11 +1,15 @@
 import '/flutter_flow/flutter_flow_theme.dart';
 import '/flutter_flow/flutter_flow_util.dart';
 import '/flutter_flow/flutter_flow_widgets.dart';
+import '/services/location_service.dart';
+import '/services/socket_service.dart';
+import '/services/auth_service.dart';
 import 'dart:ui';
 import '/index.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'dashboard_main_model.dart';
 export 'dashboard_main_model.dart';
@@ -22,13 +26,206 @@ class DashboardMainWidget extends StatefulWidget {
 
 class _DashboardMainWidgetState extends State<DashboardMainWidget> {
   late DashboardMainModel _model;
-
   final scaffoldKey = GlobalKey<ScaffoldState>();
+  
+  final LocationService _locationService = LocationService();
+  final SocketService _socketService = SocketService();
+  final AuthService _authService = AuthService();
+  
+  bool _isSOSLoading = false;
 
   @override
   void initState() {
     super.initState();
     _model = createModel(context, () => DashboardMainModel());
+    _initializeSocket();
+  }
+  
+  Future<void> _initializeSocket() async {
+    try {
+      // Get user profile to get user ID
+      final profile = await _authService.getProfile();
+      final userId = profile['id'];
+      
+      // Connect socket - use machine IP for physical device
+      // Machine IP: 10.235.8.136 (actual backend IP)
+      _socketService.connect('http://10.235.8.136:5000', userId);
+      
+      // Listen for nearby SOS alerts (proximity-based)
+      _socketService.listenForNearbySOS(
+        proximityMeters: 1000, // 1km radius
+        onNearbyAlert: (alertData, distanceMeters) {
+          _showNearbySOSAlertNotification(alertData, distanceMeters);
+        },
+      );
+      
+    } catch (e) {
+      print('Error initializing socket: $e');
+    }
+  }
+  
+  void _showNearbySOSAlertNotification(Map<String, dynamic> alertData, double distanceMeters) {
+    final userName = alertData['user_name'] ?? 'Someone';
+    final distanceKm = (distanceMeters / 1000).toStringAsFixed(2);
+    final mapsLink = alertData['google_maps_link'] ?? '';
+    
+    // Show prominent alert dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: Colors.red[50],
+          title: Row(
+            children: [
+              Icon(Icons.warning, color: Colors.red, size: 32),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  '🚨 EMERGENCY NEARBY',
+                  style: TextStyle(
+                    color: Colors.red,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 20,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '$userName needs help!',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              SizedBox(height: 12),
+              Row(
+                children: [
+                  Icon(Icons.location_on, color: Colors.red),
+                  SizedBox(width: 8),
+                  Text(
+                    '$distanceKm km away from you',
+                    style: TextStyle(fontSize: 16),
+                  ),
+                ],
+              ),
+              SizedBox(height: 16),
+              Text(
+                'Please help if you can safely do so.',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: Text('DISMISS'),
+            ),
+            ElevatedButton.icon(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                // Open in Google Maps
+                if (mapsLink.isNotEmpty) {
+                  await launchUrl(Uri.parse(mapsLink));
+                }
+              },
+              icon: Icon(Icons.map),
+              label: Text('VIEW LOCATION'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+    
+    // Also show snackbar for quick notification
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('🚨 Emergency ${distanceKm}km away!'),
+        backgroundColor: Colors.red,
+        duration: Duration(seconds: 5),
+        action: SnackBarAction(
+          label: 'VIEW',
+          textColor: Colors.white,
+          onPressed: () async {
+            if (mapsLink.isNotEmpty) {
+              await launchUrl(Uri.parse(mapsLink));
+            }
+          },
+        ),
+      ),
+    );
+  }
+  
+  Future<void> _triggerSOS() async {
+    if (_isSOSLoading) return;
+    
+    setState(() {
+      _isSOSLoading = true;
+    });
+    
+    try {
+      // Get current location
+      final position = await _locationService.getCurrentLocation();
+      
+      if (position == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Unable to get location. Please enable location services.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+      
+      // Get user ID
+      final profile = await _authService.getProfile();
+      final userId = profile['id'];
+      
+      // Trigger SOS
+      _socketService.triggerSOS(
+        userId: userId,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        message: 'Emergency SOS Alert',
+      );
+      
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('SOS Alert sent successfully!'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 3),
+        ),
+      );
+      
+      print('SOS triggered: ${position.latitude}, ${position.longitude}');
+    } catch (e) {
+      print('Error triggering SOS: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to send SOS alert. Please try again.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      setState(() {
+        _isSOSLoading = false;
+      });
+    }
   }
 
   @override
@@ -381,93 +578,119 @@ class _DashboardMainWidgetState extends State<DashboardMainWidget> {
                       child: Column(
                         mainAxisSize: MainAxisSize.max,
                         children: [
-                          Material(
-                            color: Colors.transparent,
-                            elevation: 5,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Container(
-                              width: double.infinity,
-                              height: 120,
-                              decoration: BoxDecoration(
-                                boxShadow: [
-                                  BoxShadow(
-                                    blurRadius: 15,
-                                    color: Color(0x66FF1744),
-                                    offset: Offset(
-                                      0,
-                                      8,
-                                    ),
-                                  )
-                                ],
-                                gradient: LinearGradient(
-                                  colors: [
-                                    Color(0xFFFF1744),
-                                    Color(0xFFD50000)
-                                  ],
-                                  stops: [0, 1],
-                                  begin: AlignmentDirectional(1, -1),
-                                  end: AlignmentDirectional(-1, 1),
-                                ),
+                          InkWell(
+                            onTap: _isSOSLoading ? null : _triggerSOS,
+                            child: Material(
+                              color: Colors.transparent,
+                              elevation: 5,
+                              shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(16),
                               ),
-                              child: Padding(
-                                padding: EdgeInsetsDirectional.fromSTEB(
-                                    25, 0, 25, 0),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.max,
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  crossAxisAlignment: CrossAxisAlignment.center,
-                                  children: [
-                                    Row(
-                                      mainAxisSize: MainAxisSize.max,
-                                      children: [
-                                        Icon(
-                                          Icons.people_outlined,
-                                          color: Colors.white,
-                                          size: 55,
-                                        ),
-                                        Column(
-                                          mainAxisSize: MainAxisSize.max,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              'Notify Family',
-                                              style: FlutterFlowTheme.of(
-                                                      context)
-                                                  .titleLarge
-                                                  .override(
-                                                    font:
-                                                        GoogleFonts.interTight(
-                                                      fontWeight:
-                                                          FontWeight.w800,
+                              child: Container(
+                                width: double.infinity,
+                                height: 120,
+                                decoration: BoxDecoration(
+                                  boxShadow: [
+                                    BoxShadow(
+                                      blurRadius: 15,
+                                      color: Color(0x66FF1744),
+                                      offset: Offset(
+                                        0,
+                                        8,
+                                      ),
+                                    )
+                                  ],
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      Color(0xFFFF1744),
+                                      Color(0xFFD50000)
+                                    ],
+                                    stops: [0, 1],
+                                    begin: AlignmentDirectional(1, -1),
+                                    end: AlignmentDirectional(-1, 1),
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Padding(
+                                  padding: EdgeInsetsDirectional.fromSTEB(
+                                      25, 0, 25, 0),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.max,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    crossAxisAlignment: CrossAxisAlignment.center,
+                                    children: [
+                                      Row(
+                                        mainAxisSize: MainAxisSize.max,
+                                        children: [
+                                          _isSOSLoading
+                                              ? SizedBox(
+                                                  width: 55,
+                                                  height: 55,
+                                                  child: CircularProgressIndicator(
+                                                    color: Colors.white,
+                                                    strokeWidth: 3,
+                                                  ),
+                                                )
+                                              : Icon(
+                                                  Icons.people_outlined,
+                                                  color: Colors.white,
+                                                  size: 55,
+                                                ),
+                                          Column(
+                                            mainAxisSize: MainAxisSize.max,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                'Notify Family',
+                                                style: FlutterFlowTheme.of(
+                                                        context)
+                                                    .titleLarge
+                                                    .override(
+                                                      font:
+                                                          GoogleFonts.interTight(
+                                                        fontWeight:
+                                                            FontWeight.w800,
+                                                        fontStyle:
+                                                            FlutterFlowTheme.of(
+                                                                    context)
+                                                                .titleLarge
+                                                                .fontStyle,
+                                                      ),
+                                                      color: Colors.white,
+                                                      fontSize: 24,
+                                                      letterSpacing: 0.0,
+                                                      fontWeight: FontWeight.w800,
                                                       fontStyle:
                                                           FlutterFlowTheme.of(
                                                                   context)
                                                               .titleLarge
                                                               .fontStyle,
                                                     ),
-                                                    color: Colors.white,
-                                                    fontSize: 24,
-                                                    letterSpacing: 0.0,
-                                                    fontWeight: FontWeight.w800,
-                                                    fontStyle:
-                                                        FlutterFlowTheme.of(
-                                                                context)
-                                                            .titleLarge
-                                                            .fontStyle,
-                                                  ),
-                                            ),
-                                            Text(
-                                              'Alert Trusted Contacts',
-                                              style:
-                                                  FlutterFlowTheme.of(context)
-                                                      .bodyMedium
-                                                      .override(
-                                                        font: GoogleFonts.inter(
+                                              ),
+                                              Text(
+                                                'Alert Trusted Contacts',
+                                                style:
+                                                    FlutterFlowTheme.of(context)
+                                                        .bodyMedium
+                                                        .override(
+                                                          font: GoogleFonts.inter(
+                                                            fontWeight:
+                                                                FlutterFlowTheme.of(
+                                                                        context)
+                                                                    .bodyMedium
+                                                                    .fontWeight,
+                                                            fontStyle:
+                                                                FlutterFlowTheme.of(
+                                                                        context)
+                                                                    .bodyMedium
+                                                                    .fontStyle,
+                                                          ),
+                                                          color:
+                                                              Color(0xF2FFFFFF),
+                                                          fontSize: 15,
+                                                          letterSpacing: 0.0,
                                                           fontWeight:
                                                               FlutterFlowTheme.of(
                                                                       context)
@@ -479,32 +702,18 @@ class _DashboardMainWidgetState extends State<DashboardMainWidget> {
                                                                   .bodyMedium
                                                                   .fontStyle,
                                                         ),
-                                                        color:
-                                                            Color(0xF2FFFFFF),
-                                                        fontSize: 15,
-                                                        letterSpacing: 0.0,
-                                                        fontWeight:
-                                                            FlutterFlowTheme.of(
-                                                                    context)
-                                                                .bodyMedium
-                                                                .fontWeight,
-                                                        fontStyle:
-                                                            FlutterFlowTheme.of(
-                                                                    context)
-                                                                .bodyMedium
-                                                                .fontStyle,
-                                                      ),
-                                            ),
-                                          ],
-                                        ),
-                                      ].divide(SizedBox(width: 20)),
-                                    ),
-                                    Icon(
-                                      Icons.chevron_right_rounded,
-                                      color: Colors.white,
-                                      size: 28,
-                                    ),
-                                  ],
+                                              ),
+                                            ],
+                                          ),
+                                        ].divide(SizedBox(width: 20)),
+                                      ),
+                                      Icon(
+                                        Icons.chevron_right_rounded,
+                                        color: Colors.white,
+                                        size: 28,
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
@@ -1051,51 +1260,59 @@ class _DashboardMainWidgetState extends State<DashboardMainWidget> {
                         color: Color(0xFFBDBDBD),
                         size: 28,
                       ),
-                      Material(
-                        color: Colors.transparent,
-                        elevation: 8,
-                        shape: const CircleBorder(),
-                        child: Container(
-                          width: 80,
-                          height: 80,
-                          decoration: BoxDecoration(
-                            color: Color(0xFFFF1744),
-                            boxShadow: [
-                              BoxShadow(
-                                blurRadius: 12,
-                                color: Color(0x66FF1744),
-                                offset: Offset(
-                                  0,
-                                  4,
-                                ),
-                              )
-                            ],
-                            shape: BoxShape.circle,
-                          ),
-                          child: Align(
-                            alignment: AlignmentDirectional(0, 0),
-                            child: Padding(
-                              padding: EdgeInsets.all(8),
-                              child: Text(
-                                'SOS',
-                                textAlign: TextAlign.center,
-                                style: FlutterFlowTheme.of(context)
-                                    .titleLarge
-                                    .override(
-                                      font: GoogleFonts.interTight(
-                                        fontWeight: FontWeight.w800,
-                                        fontStyle: FlutterFlowTheme.of(context)
+                      InkWell(
+                        onTap: _isSOSLoading ? null : _triggerSOS,
+                        child: Material(
+                          color: Colors.transparent,
+                          elevation: 8,
+                          shape: const CircleBorder(),
+                          child: Container(
+                            width: 80,
+                            height: 80,
+                            decoration: BoxDecoration(
+                              color: Color(0xFFFF1744),
+                              boxShadow: [
+                                BoxShadow(
+                                  blurRadius: 12,
+                                  color: Color(0x66FF1744),
+                                  offset: Offset(
+                                    0,
+                                    4,
+                                  ),
+                                )
+                              ],
+                              shape: BoxShape.circle,
+                            ),
+                            child: Align(
+                              alignment: AlignmentDirectional(0, 0),
+                              child: Padding(
+                                padding: EdgeInsets.all(8),
+                                child: _isSOSLoading
+                                    ? CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 3,
+                                      )
+                                    : Text(
+                                        'SOS',
+                                        textAlign: TextAlign.center,
+                                        style: FlutterFlowTheme.of(context)
                                             .titleLarge
-                                            .fontStyle,
+                                            .override(
+                                              font: GoogleFonts.interTight(
+                                                fontWeight: FontWeight.w800,
+                                                fontStyle: FlutterFlowTheme.of(context)
+                                                    .titleLarge
+                                                    .fontStyle,
+                                              ),
+                                              color: Colors.white,
+                                              fontSize: 18,
+                                              letterSpacing: 0.0,
+                                              fontWeight: FontWeight.w800,
+                                              fontStyle: FlutterFlowTheme.of(context)
+                                                  .titleLarge
+                                                  .fontStyle,
+                                            ),
                                       ),
-                                      color: Colors.white,
-                                      fontSize: 18,
-                                      letterSpacing: 0.0,
-                                      fontWeight: FontWeight.w800,
-                                      fontStyle: FlutterFlowTheme.of(context)
-                                          .titleLarge
-                                          .fontStyle,
-                                    ),
                               ),
                             ),
                           ),
